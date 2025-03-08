@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +17,16 @@
     xs.items[xs.count++] = x;                                                  \
   } while (0)
 
+bool match(const char *restrict str, const char *restrict pattern) {
+  assert(str && pattern);
+  while (*str != '\0' && *pattern != '\0') {
+    if (tolower(*str) == tolower(*pattern))
+      ++pattern;
+    ++str;
+  }
+  return *pattern == '\0';
+}
+
 typedef struct {
   char **items;
   size_t count;
@@ -23,7 +34,7 @@ typedef struct {
 } Strings;
 
 int main(int argc, char *argv[]) {
-  char *buf;
+  char *buf, *pattern;
   size_t buf_size;
   int32_t n;
   Strings strings = {0};
@@ -32,6 +43,8 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Usage: %s <PATTERN>\n", argv[0]);
     exit(1);
   }
+
+  pattern = argv[1];
 
   buf = NULL;
   while ((n = getline(&buf, &buf_size, stdin)) != -1) {
@@ -42,7 +55,8 @@ int main(int argc, char *argv[]) {
   free(buf);
 
   for (size_t i = 0; i < strings.count; ++i) {
-    printf("%s\n", strings.items[i]);
+    if (match(strings.items[i], pattern))
+      printf("%s\n", strings.items[i]);
   }
 
   // clean up
