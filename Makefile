@@ -1,2 +1,2 @@
 all:
-	gcc -g -fsanitize=address -lm fcuk.c main.c -o main.out
+	gcc -Wall -Werror -g -O3 -fsanitize=address -lm common.c fcuk.c main.c -o main.out
