@@ -13,6 +13,39 @@ __device__ bool isspecial(char c) {
 bool init = false;
 __constant__ score_t SPECIAL_BONUS_C[256];
 
+__global__ void match_kernel(const char *__restrict__ str,
+                             const char *__restrict__ pattern, size_t n_str,
+                             size_t n_ptrn) {
+  size_t j = threadIdx.x;
+  __shared__ size_t idx[MAX_STR_LEN]; // TODO: wasting resource, change to n_str
+  __shared__ char c;
+  int32_t prev = -1;
+
+  for (size_t i = 0; i < n_ptrn; ++i) {
+    if (threadIdx.x == 0) {
+      c = pattern[i];
+    }
+    __syncthreads();
+
+    idx[j] = c == str[j] && j > prev ? j : INT32_MAX;
+
+    // calculate min using parallel reduction
+    for (size_t s = blockDim.x / 2; s >= 1; s /= 2) {
+      if (j < s) {
+        idx[j] = min(idx[j], idx[j + s]);
+      }
+      __syncthreads();
+    }
+
+    prev = idx[0];
+
+    if (prev == INT32_MAX) {
+      // TODO return false
+      return;
+    }
+  }
+}
+
 __global__ void fused_score_kernel(const char *__restrict__ str,
                                    const char *__restrict__ pattern, score_t *M,
                                    score_t *D, size_t n_str, size_t n_ptrn) {
