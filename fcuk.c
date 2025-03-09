@@ -1,5 +1,26 @@
 #include "fcuk.h"
 
+bool isspecial(char c) {
+  return c == '/' || c == '-' || c == '_' || c == ' ' || c == '.';
+}
+
+void compute_bonus(const char *restrict str, size_t n, score_t *match_bonus) {
+  char prev = '/';
+  for (size_t i = 0; i < n; ++i) {
+    char curr = str[i];
+    if (islower(curr) && isspecial(prev)) {
+      match_bonus[i] = SPECIAL_BONUS[(unsigned char)prev];
+    } else if (isupper(curr) && isspecial(prev)) {
+      match_bonus[i] = SPECIAL_BONUS[(unsigned char)prev];
+    } else if (isupper(curr) && islower(prev)) {
+      match_bonus[i] = UPPERCASE_BONUS;
+    } else {
+      match_bonus[i] = 0;
+    }
+    prev = curr;
+  }
+}
+
 score_t score(const char *restrict str, const char *restrict pattern) {
   size_t n_str, n_ptrn;
 

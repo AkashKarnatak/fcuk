@@ -26,14 +26,11 @@ typedef double score_t;
 #define SPACE_BONUS 0.8
 #define DOT_BONUS 0.6
 
+extern const score_t SPECIAL_BONUS[256];
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-bool isspecial(char c);
-
-void compute_bonus(const char *__restrict__ str, size_t n,
-                   score_t *match_bonus);
 
 bool match(const char *__restrict__ str, const char *__restrict__ pattern);
 
