@@ -29,6 +29,8 @@ __global__ void fused_score_kernel(const char *__restrict__ str,
       match_bonus_s[j - 1] = SPECIAL_BONUS_C[(unsigned char)prev];
     } else if (isupper(curr) && islower(prev)) {
       match_bonus_s[j - 1] = UPPERCASE_BONUS;
+    } else if (isdigit(curr) && isspecial(prev)) {
+      match_bonus_s[j - 1] = SPECIAL_BONUS_C[(unsigned char)prev];
     } else {
       match_bonus_s[j - 1] = 0;
     }

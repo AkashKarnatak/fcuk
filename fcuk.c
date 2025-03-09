@@ -14,6 +14,8 @@ void compute_bonus(const char *restrict str, size_t n, score_t *match_bonus) {
       match_bonus[i] = SPECIAL_BONUS[(unsigned char)prev];
     } else if (isupper(curr) && islower(prev)) {
       match_bonus[i] = UPPERCASE_BONUS;
+    } else if (isdigit(curr) && isspecial(prev)) {
+      match_bonus[i] = SPECIAL_BONUS[(unsigned char)prev];
     } else {
       match_bonus[i] = 0;
     }
