@@ -10,6 +10,8 @@ __device__ bool isspecial(char c) {
   return c == '/' || c == '-' || c == '_' || c == ' ' || c == '.';
 }
 
+__device__ char tolower(char c) { return isupper(c) ? c - 'A' + 'a' : c; }
+
 bool init = false;
 __constant__ score_t SPECIAL_BONUS_C[256];
 
@@ -79,19 +81,25 @@ __global__ void fused_score_kernel(const char *__restrict__ str,
         continue;
       }
       if (j == 0) {
-        M[i * (n_str + 1)] = 0;
+        M[i * (n_str + 1)] = SCORE_MIN;
         continue;
       }
 
       score_t gap_penalty =
           i == n_ptrn ? GAP_PENALTY_TRAILING : GAP_PENALTY_INNER;
 
-      if (str[j - 1] == pattern[i - 1]) {
-        score_t bonus = (D[(i - 1) * (n_str + 1) + j - 1] != SCORE_MIN)
-                            ? CONSECUTIVE_BONUS
-                            : match_bonus_s[j - 1];
+      if (tolower(str[j - 1]) == tolower(pattern[i - 1])) {
+        score_t score;
+        if (i == 1) {
+          score = (j - 1) * GAP_PENALTY_LEADING + match_bonus_s[j - 1];
+        } else {
+          score = M[(i - 1) * (n_str + 1) + j - 1] +
+                  ((D[(i - 1) * (n_str + 1) + j - 1] != SCORE_MIN)
+                       ? CONSECUTIVE_BONUS
+                       : match_bonus_s[j - 1]);
+        }
 
-        D[i * (n_str + 1) + j] = M[(i - 1) * (n_str + 1) + j - 1] + bonus;
+        D[i * (n_str + 1) + j] = score;
         M[i * (n_str + 1) + j] = max(D[i * (n_str + 1) + j],
                                      M[i * (n_str + 1) + j - 1] + gap_penalty);
       } else {
@@ -112,6 +120,12 @@ score_t score(const char *__restrict__ str, const char *__restrict__ pattern) {
   n_ptrn = strlen(pattern);
 
   assert(n_str <= 1024 && n_ptrn <= 1024);
+
+  if (n_str == n_ptrn) {
+    // this function is only called when str contains the
+    // pattern
+    return SCORE_MAX;
+  }
 
   // TODO: figure out a better way
   if (!init) {

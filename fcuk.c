@@ -31,6 +31,12 @@ score_t score(const char *restrict str, const char *restrict pattern) {
 
   assert(n_str <= 1024 && n_ptrn <= 1024);
 
+  if (n_str == n_ptrn) {
+    // this function is only called when str contains the
+    // pattern
+    return SCORE_MAX;
+  }
+
   score_t match_bonus[n_str];
   compute_bonus(str, n_str, match_bonus);
 
@@ -38,7 +44,7 @@ score_t score(const char *restrict str, const char *restrict pattern) {
   score_t D[n_ptrn + 1][n_str + 1];
 
   for (size_t i = 0; i <= n_ptrn; ++i) {
-    M[i][0] = 0;
+    M[i][0] = SCORE_MIN;
   }
   for (size_t j = 0; j <= n_str; ++j) {
     M[0][j] = SCORE_MIN;
@@ -49,11 +55,17 @@ score_t score(const char *restrict str, const char *restrict pattern) {
         i == n_ptrn ? GAP_PENALTY_TRAILING : GAP_PENALTY_INNER;
 
     for (size_t j = 1; j <= n_str; ++j) {
-      if (str[j - 1] == pattern[i - 1]) {
-        score_t bonus = (D[i - 1][j - 1] != SCORE_MIN) ? CONSECUTIVE_BONUS
-                                                       : match_bonus[j - 1];
+      if (tolower(str[j - 1]) == tolower(pattern[i - 1])) {
+        score_t score;
+        if (i == 1) {
+          score = (j - 1) * GAP_PENALTY_LEADING + match_bonus[j - 1];
+        } else {
+          score = M[i - 1][j - 1] + ((D[i - 1][j - 1] != SCORE_MIN)
+                                         ? CONSECUTIVE_BONUS
+                                         : match_bonus[j - 1]);
+        }
 
-        D[i][j] = M[i - 1][j - 1] + bonus;
+        D[i][j] = score;
         M[i][j] = fmax(D[i][j], M[i][j - 1] + gap_penalty);
       } else {
         D[i][j] = SCORE_MIN;
