@@ -12,7 +12,7 @@
 
 #define MAX_STR_LEN 1024
 
-typedef double score_t;
+typedef float score_t;
 
 #define SCORE_MIN -INFINITY
 #define SCORE_MAX INFINITY

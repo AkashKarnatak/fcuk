@@ -50,66 +50,105 @@ __global__ void match_kernel(const char *__restrict__ str,
   }
 }
 
-__global__ void fused_score_kernel(const char *__restrict__ str,
-                                   const char *__restrict__ pattern, score_t *M,
-                                   score_t *D, size_t n_str, size_t n_ptrn) {
+__global__ void fused_score_kernel(char *__restrict__ buf,
+                                   size_t *__restrict__ indices,
+                                   size_t buf_size, size_t n_sources,
+                                   const char *__restrict__ pattern,
+                                   size_t n_pattern, score_t *res_scores) {
+  size_t idx = indices[blockIdx.x];
+  string_t source = {
+      .data = buf + idx,
+      .len =
+          (blockIdx.x == n_sources - 1 ? buf_size : indices[blockIdx.x + 1]) -
+          idx};
   size_t j = threadIdx.x;
+
+  if (j >= source.len)
+    return;
+
+  if (source.len > 1024 || n_pattern > 1024) {
+    // strings too long
+    if (j == 0) {
+      res_scores[blockIdx.x] = SCORE_MIN;
+    }
+    return;
+  }
+
+  if (source.len == n_pattern) {
+    // this function is only called when str contains the
+    // pattern
+    if (j == 0) {
+      res_scores[blockIdx.x] = SCORE_MAX;
+    }
+    return;
+  }
+
   __shared__ score_t
       match_bonus_s[MAX_STR_LEN]; // TODO: wasting resource, change to n_str
+  __shared__ score_t M_s[3][MAX_STR_LEN], D_s[3][MAX_STR_LEN];
 
-  if (j >= 1 && j <= n_str) {
-    char curr = str[j - 1], prev = j > 1 ? str[j - 2] : '/';
+  M_s[0][j] = SCORE_MIN;
+  M_s[1][j] = SCORE_MIN;
+  M_s[2][j] = SCORE_MIN;
+
+  D_s[0][j] = SCORE_MIN;
+  D_s[1][j] = SCORE_MIN;
+  D_s[2][j] = SCORE_MIN;
+
+  if (j < source.len) {
+    char curr = source.data[j], prev = j > 0 ? source.data[j - 1] : '/';
 
     if (islower(curr) && isspecial(prev)) {
-      match_bonus_s[j - 1] = SPECIAL_BONUS_C[(unsigned char)prev];
+      match_bonus_s[j] = SPECIAL_BONUS_C[(unsigned char)prev];
     } else if (isupper(curr) && isspecial(prev)) {
-      match_bonus_s[j - 1] = SPECIAL_BONUS_C[(unsigned char)prev];
+      match_bonus_s[j] = SPECIAL_BONUS_C[(unsigned char)prev];
     } else if (isupper(curr) && islower(prev)) {
-      match_bonus_s[j - 1] = UPPERCASE_BONUS;
+      match_bonus_s[j] = UPPERCASE_BONUS;
     } else if (isdigit(curr) && isspecial(prev)) {
-      match_bonus_s[j - 1] = SPECIAL_BONUS_C[(unsigned char)prev];
+      match_bonus_s[j] = SPECIAL_BONUS_C[(unsigned char)prev];
     } else {
-      match_bonus_s[j - 1] = 0;
+      match_bonus_s[j] = 0;
     }
   }
 
   __syncthreads();
 
-  for (size_t wave = 0; wave <= (n_str + n_ptrn); ++wave) {
+  size_t prev2 = 0, prev = 1, curr = 2;
+  for (size_t wave = 0; wave <= (source.len - 1 + n_pattern - 1); ++wave) {
     int32_t i = wave - j;
-    if (i >= 0 && i <= n_ptrn) {
-      if (i == 0) {
-        M[j] = SCORE_MIN;
-        continue;
-      }
-      if (j == 0) {
-        M[i * (n_str + 1)] = SCORE_MIN;
-        continue;
-      }
 
+    // swap offset before calculating
+    curr = (curr + 1) % 3;
+    prev = (prev + 1) % 3;
+    prev2 = (prev2 + 1) % 3;
+
+    if (i >= 0 && i < n_pattern) {
       score_t gap_penalty =
-          i == n_ptrn ? GAP_PENALTY_TRAILING : GAP_PENALTY_INNER;
+          i == n_pattern - 1 ? GAP_PENALTY_TRAILING : GAP_PENALTY_INNER;
 
-      if (tolower(str[j - 1]) == tolower(pattern[i - 1])) {
-        score_t score;
-        if (i == 1) {
-          score = (j - 1) * GAP_PENALTY_LEADING + match_bonus_s[j - 1];
-        } else {
-          score = M[(i - 1) * (n_str + 1) + j - 1] +
-                  ((D[(i - 1) * (n_str + 1) + j - 1] != SCORE_MIN)
-                       ? CONSECUTIVE_BONUS
-                       : match_bonus_s[j - 1]);
+      if (tolower(source.data[j]) == tolower(pattern[i])) {
+        score_t score = SCORE_MIN;
+        if (i == 0) {
+          score = j * GAP_PENALTY_LEADING + match_bonus_s[j];
+        } else if (j > 0) {
+          score = M_s[prev2][j - 1] + ((D_s[prev2][j - 1] != SCORE_MIN)
+                                           ? CONSECUTIVE_BONUS
+                                           : match_bonus_s[j]);
         }
 
-        D[i * (n_str + 1) + j] = score;
-        M[i * (n_str + 1) + j] = max(D[i * (n_str + 1) + j],
-                                     M[i * (n_str + 1) + j - 1] + gap_penalty);
+        D_s[curr][j] = score;
+        M_s[curr][j] = fmax(
+            D_s[curr][j], (j > 0 ? M_s[prev][j - 1] : SCORE_MIN) + gap_penalty);
       } else {
-        D[i * (n_str + 1) + j] = SCORE_MIN;
-        M[i * (n_str + 1) + j] = M[i * (n_str + 1) + j - 1] + gap_penalty;
+        D_s[curr][j] = SCORE_MIN;
+        M_s[curr][j] = (j > 0 ? M_s[prev][j - 1] : SCORE_MIN) + gap_penalty;
       }
     }
     __syncthreads();
+  }
+
+  if (j == 0) {
+    res_scores[blockIdx.x] = M_s[curr][source.len - 1];
   }
 }
 
@@ -133,61 +172,80 @@ strings_t match(strings_t *sources, string_t pattern) {
   return matches;
 }
 
-score_t score(string_t source, string_t pattern) {
-  char *str_d, *pattern_d;
-  score_t res, *M_d, *D_d;
-
-  if (source.len >= 1024 || pattern.len >= 1024) {
-    // strings too long
-    return SCORE_MIN;
-  }
-
-  if (source.len == pattern.len) {
-    // this function is only called when str contains the
-    // pattern
-    return SCORE_MAX;
-  }
-
+results_t score_matches(strings_t *__restrict__ matches, string_t pattern) {
   // TODO: figure out a better way
   if (!init) {
     cudaMemcpyToSymbol(SPECIAL_BONUS_C, SPECIAL_BONUS, sizeof(SPECIAL_BONUS));
     init = true;
   }
 
-  cudaMalloc(&str_d, source.len * sizeof(char));
-  cudaMalloc(&pattern_d, pattern.len * sizeof(char));
-  cudaMalloc(&M_d, (pattern.len + 1) * (source.len + 1) * sizeof(score_t));
-  cudaMalloc(&D_d, (pattern.len + 1) * (source.len + 1) * sizeof(score_t));
+  results_t res = {0};
 
-  cudaMemcpy(str_d, source.data, source.len * sizeof(char),
+  size_t buf_size = 0;
+  for (size_t i = 0; i < matches->count; ++i) {
+    buf_size += matches->items[i].len;
+  }
+
+  char *buf_h, *buf_h_itr; // pinned memory
+  size_t *indices_h;       // pinned memory
+  score_t *res_scores_h;   // pinned memory
+  char *buf_d, *pattern_d;
+  size_t *indices_d;
+  score_t *res_scores_d;
+  size_t prev_sum, n_threads;
+
+  cudaMallocHost(&buf_h, buf_size * sizeof(char));
+  cudaMallocHost(&indices_h, matches->count * sizeof(size_t));
+  cudaMallocHost(&res_scores_h, matches->count * sizeof(score_t));
+
+  cudaMalloc(&buf_d, buf_size * sizeof(char));
+  cudaMalloc(&indices_d, matches->count * sizeof(size_t));
+  cudaMalloc(&pattern_d, pattern.len * sizeof(char));
+  cudaMalloc(&res_scores_d, matches->count * sizeof(score_t));
+
+  buf_h_itr = buf_h;
+  prev_sum = 0, n_threads = 0;
+  for (size_t i = 0; i < matches->count; ++i) {
+    memcpy(buf_h_itr, matches->items[i].data,
+           matches->items[i].len * sizeof(char));
+    buf_h_itr += matches->items[i].len;
+
+    indices_h[i] = prev_sum;
+    prev_sum += matches->items[i].len;
+
+    n_threads =
+        matches->items[i].len > n_threads ? matches->items[i].len : n_threads;
+  }
+  n_threads = 1024 < n_threads ? 1024 : n_threads;
+
+  cudaMemcpy(buf_d, buf_h, buf_size * sizeof(char), cudaMemcpyHostToDevice);
+  cudaMemcpy(indices_d, indices_h, matches->count * sizeof(size_t),
              cudaMemcpyHostToDevice);
   cudaMemcpy(pattern_d, pattern.data, pattern.len * sizeof(char),
              cudaMemcpyHostToDevice);
 
-  dim3 numThreads(source.len + 1);
-  dim3 numBlocks(1);
-  fused_score_kernel<<<numBlocks, numThreads>>>(str_d, pattern_d, M_d, D_d,
-                                                source.len, pattern.len);
+  dim3 numThreads(n_threads);
+  dim3 numBlocks(matches->count);
+  fused_score_kernel<<<numBlocks, numThreads>>>(buf_d, indices_d, buf_size,
+                                                matches->count, pattern_d,
+                                                pattern.len, res_scores_d);
 
-  cudaMemcpy(&res, &M_d[pattern.len * (source.len + 1) + source.len],
-             sizeof(score_t), cudaMemcpyDeviceToHost);
-
-  cudaFree(str_d);
-  cudaFree(pattern_d);
-  cudaFree(M_d);
-  cudaFree(D_d);
-
-  return res;
-}
-
-results_t score_matches(strings_t *matches, string_t pattern) {
-  results_t res = {0};
+  cudaMemcpy(res_scores_h, res_scores_d, matches->count * sizeof(score_t),
+             cudaMemcpyDeviceToHost);
 
   for (size_t i = 0; i < matches->count; ++i) {
-    scored_entry_t s = {.str = matches->items[i],
-                        .score = score(matches->items[i], pattern)};
+    scored_entry_t s = {.str = matches->items[i], .score = res_scores_h[i]};
     da_append(res, s, scored_entry_t);
   }
+
+  cudaFree(buf_h);
+  cudaFree(indices_h);
+  cudaFree(res_scores_h);
+
+  cudaFree(buf_d);
+  cudaFree(indices_d);
+  cudaFree(pattern_d);
+  cudaFree(res_scores_d);
 
   return res;
 }
