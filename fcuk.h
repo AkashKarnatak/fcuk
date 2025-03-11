@@ -7,10 +7,9 @@
 extern "C" {
 #endif
 
-void compute_bonus(const char *__restrict__ str, size_t n,
-                   score_t *__restrict__ match_bonus);
+strings_t match(strings_t *sources, string_t pattern);
 
-score_t score(const char *__restrict__ str, const char *__restrict__ pattern);
+results_t score_matches(strings_t *matches, string_t pattern);
 
 #ifdef __cplusplus
 } // extern "C"

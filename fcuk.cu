@@ -1,16 +1,18 @@
 #include "fcuk.h"
 
-__device__ bool islower(char c) { return c >= 'a' && c <= 'z'; }
+__device__ inline bool islower(char c) { return c >= 'a' && c <= 'z'; }
 
-__device__ bool isupper(char c) { return c >= 'A' && c <= 'Z'; }
+__device__ inline bool isupper(char c) { return c >= 'A' && c <= 'Z'; }
 
-__device__ bool isdigit(char c) { return c >= '0' && c <= '9'; }
+__device__ inline bool isdigit(char c) { return c >= '0' && c <= '9'; }
 
-__device__ bool isspecial(char c) {
+__device__ inline bool isspecial(char c) {
   return c == '/' || c == '-' || c == '_' || c == ' ' || c == '.';
 }
 
-__device__ char tolower(char c) { return isupper(c) ? c - 'A' + 'a' : c; }
+__device__ inline char tolower(char c) {
+  return isupper(c) ? c - 'A' + 'a' : c;
+}
 
 bool init = false;
 __constant__ score_t SPECIAL_BONUS_C[256];
@@ -111,17 +113,36 @@ __global__ void fused_score_kernel(const char *__restrict__ str,
   }
 }
 
-score_t score(const char *__restrict__ str, const char *__restrict__ pattern) {
-  size_t n_str, n_ptrn;
+bool has_match(const char *__restrict__ source,
+               const char *__restrict__ pattern) {
+  while (*source != '\0' && *pattern != '\0') {
+    if (tolower((int)*source) == tolower((int)*pattern))
+      ++pattern;
+    ++source;
+  }
+  return *pattern == '\0';
+}
+
+strings_t match(strings_t *sources, string_t pattern) {
+  strings_t matches = {0};
+  for (size_t i = 0; i < sources->count; ++i) {
+    if (has_match(sources->items[i].data, pattern.data)) {
+      da_append(matches, sources->items[i], string_t);
+    }
+  }
+  return matches;
+}
+
+score_t score(string_t source, string_t pattern) {
   char *str_d, *pattern_d;
   score_t res, *M_d, *D_d;
 
-  n_str = strlen(str);
-  n_ptrn = strlen(pattern);
+  if (source.len >= 1024 || pattern.len >= 1024) {
+    // strings too long
+    return SCORE_MIN;
+  }
 
-  assert(n_str <= 1024 && n_ptrn <= 1024);
-
-  if (n_str == n_ptrn) {
+  if (source.len == pattern.len) {
     // this function is only called when str contains the
     // pattern
     return SCORE_MAX;
@@ -133,26 +154,40 @@ score_t score(const char *__restrict__ str, const char *__restrict__ pattern) {
     init = true;
   }
 
-  cudaMalloc(&str_d, n_str * sizeof(char));
-  cudaMalloc(&pattern_d, n_ptrn * sizeof(char));
-  cudaMalloc(&M_d, (n_ptrn + 1) * (n_str + 1) * sizeof(score_t));
-  cudaMalloc(&D_d, (n_ptrn + 1) * (n_str + 1) * sizeof(score_t));
+  cudaMalloc(&str_d, source.len * sizeof(char));
+  cudaMalloc(&pattern_d, pattern.len * sizeof(char));
+  cudaMalloc(&M_d, (pattern.len + 1) * (source.len + 1) * sizeof(score_t));
+  cudaMalloc(&D_d, (pattern.len + 1) * (source.len + 1) * sizeof(score_t));
 
-  cudaMemcpy(str_d, str, n_str * sizeof(char), cudaMemcpyHostToDevice);
-  cudaMemcpy(pattern_d, pattern, n_ptrn * sizeof(char), cudaMemcpyHostToDevice);
+  cudaMemcpy(str_d, source.data, source.len * sizeof(char),
+             cudaMemcpyHostToDevice);
+  cudaMemcpy(pattern_d, pattern.data, pattern.len * sizeof(char),
+             cudaMemcpyHostToDevice);
 
-  dim3 numThreads(n_str + 1);
+  dim3 numThreads(source.len + 1);
   dim3 numBlocks(1);
   fused_score_kernel<<<numBlocks, numThreads>>>(str_d, pattern_d, M_d, D_d,
-                                                n_str, n_ptrn);
+                                                source.len, pattern.len);
 
-  cudaMemcpy(&res, &M_d[n_ptrn * (n_str + 1) + n_str], sizeof(score_t),
-             cudaMemcpyDeviceToHost);
+  cudaMemcpy(&res, &M_d[pattern.len * (source.len + 1) + source.len],
+             sizeof(score_t), cudaMemcpyDeviceToHost);
 
   cudaFree(str_d);
   cudaFree(pattern_d);
   cudaFree(M_d);
   cudaFree(D_d);
+
+  return res;
+}
+
+results_t score_matches(strings_t *matches, string_t pattern) {
+  results_t res = {0};
+
+  for (size_t i = 0; i < matches->count; ++i) {
+    scored_entry_t s = {.str = matches->items[i],
+                        .score = score(matches->items[i], pattern)};
+    da_append(res, s, scored_entry_t);
+  }
 
   return res;
 }

@@ -1,53 +1,42 @@
 #include "fcuk.h"
 
-#define da_append(xs, x)                                                       \
-  do {                                                                         \
-    if (xs.count >= xs.capacity) {                                             \
-      if (xs.capacity == 0)                                                    \
-        xs.capacity = 256;                                                     \
-      else                                                                     \
-        xs.capacity *= 2;                                                      \
-      xs.items = realloc(xs.items, xs.capacity * sizeof(*xs.items));           \
-    }                                                                          \
-    xs.items[xs.count++] = x;                                                  \
-  } while (0)
-
-typedef struct {
-  char **items;
-  size_t count;
-  size_t capacity;
-} Strings;
-
 int main(int argc, char *argv[]) {
-  char *buf, *pattern;
+  char *buf;
+  string_t pattern;
   size_t buf_size;
   int32_t n;
-  Strings strings = {0};
+  strings_t entries = {0};
+  strings_t matches = {0};
+  results_t res = {0};
 
   if (argc != 2) {
     fprintf(stderr, "Usage: %s <PATTERN>\n", argv[0]);
     exit(1);
   }
 
-  pattern = argv[1];
+  pattern = (string_t){.data = argv[1], .len = strlen(argv[1])};
 
   buf = NULL;
   while ((n = getline(&buf, &buf_size, stdin)) != -1) {
     buf[n - 1] = '\0';
-    da_append(strings, buf);
+    string_t s = {.data = buf, .len = n - 1};
+    da_append(entries, s, string_t);
     buf = NULL;
   }
   free(buf);
 
-  for (size_t i = 0; i < strings.count; ++i) {
-    if (match(strings.items[i], pattern)) {
-      printf("%s: %lf\n", strings.items[i], score(strings.items[i], pattern));
-    }
+  matches = match(&entries, pattern);
+  res = score_matches(&matches, pattern);
+
+  for (size_t i = 0; i < res.count; ++i) {
+    printf("%s: %lf\n", res.items[i].str.data, res.items[i].score);
   }
 
   // clean up
-  for (size_t i = 0; i < strings.count; ++i) {
-    free(strings.items[i]);
+  for (size_t i = 0; i < entries.count; ++i) {
+    free(entries.items[i].data);
   }
-  free(strings.items);
+  free(entries.items);
+  free(matches.items);
+  free(res.items);
 }
