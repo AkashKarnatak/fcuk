@@ -47,41 +47,42 @@ score_t score(string_t source, string_t pattern) {
   score_t match_bonus[source.len];
   compute_bonus(source, match_bonus);
 
-  score_t M[pattern.len + 1][source.len + 1];
-  score_t D[pattern.len + 1][source.len + 1];
+  score_t M[2][source.len];
+  score_t D[2][source.len];
 
-  for (size_t i = 0; i <= pattern.len; ++i) {
-    M[i][0] = SCORE_MIN;
-  }
-  for (size_t j = 0; j <= source.len; ++j) {
-    M[0][j] = SCORE_MIN;
-  }
-
-  for (size_t i = 1; i <= pattern.len; ++i) {
+  size_t prev = 1,
+         curr = 0; // because buffers will be swaped before calculation
+  for (size_t i = 0; i < pattern.len; ++i) {
     score_t gap_penalty =
-        i == pattern.len ? GAP_PENALTY_TRAILING : GAP_PENALTY_INNER;
+        i == pattern.len - 1 ? GAP_PENALTY_TRAILING : GAP_PENALTY_INNER;
+    score_t prev_score = SCORE_MIN;
 
-    for (size_t j = 1; j <= source.len; ++j) {
-      if (tolower(source.data[j - 1]) == tolower(pattern.data[i - 1])) {
-        score_t score;
-        if (i == 1) {
-          score = (j - 1) * GAP_PENALTY_LEADING + match_bonus[j - 1];
-        } else {
-          score = M[i - 1][j - 1] + ((D[i - 1][j - 1] != SCORE_MIN)
-                                         ? CONSECUTIVE_BONUS
-                                         : match_bonus[j - 1]);
+    // swap buffers before calculating
+    size_t tmp = prev;
+    prev = curr;
+    curr = tmp;
+
+    for (size_t j = 0; j < source.len; ++j) {
+      if (tolower(source.data[j]) == tolower(pattern.data[i])) {
+        score_t score = SCORE_MIN;
+        if (i == 0) {
+          score = j * GAP_PENALTY_LEADING + match_bonus[j];
+        } else if (j > 0) {
+          score = M[prev][j - 1] + ((D[prev][j - 1] != SCORE_MIN)
+                                        ? CONSECUTIVE_BONUS
+                                        : match_bonus[j]);
         }
 
-        D[i][j] = score;
-        M[i][j] = fmax(D[i][j], M[i][j - 1] + gap_penalty);
+        D[curr][j] = score;
+        M[curr][j] = prev_score = fmax(D[curr][j], prev_score + gap_penalty);
       } else {
-        D[i][j] = SCORE_MIN;
-        M[i][j] = M[i][j - 1] + gap_penalty;
+        D[curr][j] = SCORE_MIN;
+        M[curr][j] = prev_score = prev_score + gap_penalty;
       }
     }
   }
 
-  return M[pattern.len][source.len];
+  return M[curr][source.len - 1];
 }
 
 strings_t match(strings_t *sources, string_t pattern) {
