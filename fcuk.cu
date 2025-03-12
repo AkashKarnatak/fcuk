@@ -17,36 +17,63 @@ __device__ inline char tolower(char c) {
 bool init = false;
 __constant__ score_t SPECIAL_BONUS_C[256];
 
-__global__ void match_kernel(const char *__restrict__ str,
-                             const char *__restrict__ pattern, size_t n_str,
-                             size_t n_ptrn) {
-  size_t j = threadIdx.x;
-  __shared__ size_t idx[MAX_STR_LEN]; // TODO: wasting resource, change to n_str
-  __shared__ char c;
+__global__ void match_kernel(char *__restrict__ buf,
+                             size_t *__restrict__ indices, size_t buf_size,
+                             size_t n_sources, const char *__restrict__ pattern,
+                             size_t n_pattern, bool *has_match) {
+  size_t idx = indices[blockIdx.x];
+  string_t source = {
+      .data = buf + idx,
+      .len =
+          (blockIdx.x == n_sources - 1 ? buf_size : indices[blockIdx.x + 1]) -
+          idx};
+  int32_t j = threadIdx.x;
+
+  if (j >= source.len)
+    return;
+
+  // // sequential
+  // if (j == 0) {
+  //   for (size_t i = 0; i < source.len; ++i) {
+  //     if (tolower(source.data[i]) == *pattern)
+  //       ++pattern;
+  //   }
+  //   has_match[blockIdx.x] = *pattern == '\0';
+  // }
+
+  if (j == 0) {
+    has_match[blockIdx.x] = true;
+  }
+
+  __shared__ size_t pos[MAX_STR_LEN]; // TODO: wasting resource, change to n_str
   int32_t prev = -1;
 
-  for (size_t i = 0; i < n_ptrn; ++i) {
-    if (threadIdx.x == 0) {
-      c = pattern[i];
-    }
+  for (size_t i = 0; i < n_pattern; ++i) {
+    pos[j] = tolower(source.data[j]) == tolower(pattern[i]) && j > prev
+                 ? j
+                 : INT32_MAX;
+
     __syncthreads();
 
-    idx[j] = c == str[j] && j > prev ? j : INT32_MAX;
-
-    // calculate min using parallel reduction
-    for (size_t s = blockDim.x / 2; s >= 1; s /= 2) {
-      if (j < s) {
-        idx[j] = min(idx[j], idx[j + s]);
+    for (size_t s = (source.len + 1) / 2; s >= 1; s = (s + 1) / 2) {
+      if (j < s && j + s < source.len) {
+        pos[j] = min(pos[j], pos[j + s]);
       }
       __syncthreads();
+      if (s == 1)
+        break;
     }
 
-    prev = idx[0];
+    prev = pos[0];
 
     if (prev == INT32_MAX) {
-      // TODO return false
+      if (j == 0) {
+        has_match[blockIdx.x] = false;
+      }
       return;
     }
+
+    __syncthreads();
   }
 }
 
@@ -163,22 +190,84 @@ bool has_match(const char *__restrict__ source,
 }
 
 strings_t match(strings_t *sources, string_t pattern) {
-  strings_t matches = {0};
-  for (size_t i = 0; i < sources->count; ++i) {
-    if (has_match(sources->items[i].data, pattern.data)) {
-      da_append(matches, sources->items[i], string_t);
-    }
-  }
-  return matches;
-}
-
-results_t score_matches(strings_t *__restrict__ matches, string_t pattern) {
   // TODO: figure out a better way
   if (!init) {
     cudaMemcpyToSymbol(SPECIAL_BONUS_C, SPECIAL_BONUS, sizeof(SPECIAL_BONUS));
     init = true;
   }
 
+  strings_t matches = {0};
+
+  size_t buf_size = 0;
+  for (size_t i = 0; i < sources->count; ++i) {
+    buf_size += sources->items[i].len;
+  }
+
+  char *buf_h, *buf_h_itr; // pinned memory
+  size_t *indices_h;       // pinned memory
+  bool *has_match_h;       // pinned memory
+  char *buf_d, *pattern_d;
+  size_t *indices_d;
+  bool *has_match_d;
+  size_t prev_sum, n_threads;
+
+  cudaMallocHost(&buf_h, buf_size * sizeof(char));
+  cudaMallocHost(&indices_h, sources->count * sizeof(size_t));
+  cudaMallocHost(&has_match_h, sources->count * sizeof(bool));
+
+  cudaMalloc(&buf_d, buf_size * sizeof(char));
+  cudaMalloc(&indices_d, sources->count * sizeof(size_t));
+  cudaMalloc(&pattern_d, pattern.len * sizeof(char));
+  cudaMalloc(&has_match_d, sources->count * sizeof(bool));
+
+  buf_h_itr = buf_h;
+  prev_sum = 0, n_threads = 0;
+  for (size_t i = 0; i < sources->count; ++i) {
+    memcpy(buf_h_itr, sources->items[i].data,
+           sources->items[i].len * sizeof(char));
+    buf_h_itr += sources->items[i].len;
+
+    indices_h[i] = prev_sum;
+    prev_sum += sources->items[i].len;
+
+    n_threads =
+        sources->items[i].len > n_threads ? sources->items[i].len : n_threads;
+  }
+  n_threads = 1024 < n_threads ? 1024 : n_threads;
+
+  cudaMemcpy(buf_d, buf_h, buf_size * sizeof(char), cudaMemcpyHostToDevice);
+  cudaMemcpy(indices_d, indices_h, sources->count * sizeof(size_t),
+             cudaMemcpyHostToDevice);
+  cudaMemcpy(pattern_d, pattern.data, pattern.len * sizeof(char),
+             cudaMemcpyHostToDevice);
+
+  dim3 numThreads(n_threads);
+  dim3 numBlocks(sources->count);
+  match_kernel<<<numBlocks, numThreads>>>(buf_d, indices_d, buf_size,
+                                          sources->count, pattern_d,
+                                          pattern.len, has_match_d);
+
+  cudaMemcpy(has_match_h, has_match_d, sources->count * sizeof(bool),
+             cudaMemcpyDeviceToHost);
+
+  for (size_t i = 0; i < sources->count; ++i) {
+    if (has_match_h[i])
+      da_append(matches, sources->items[i], string_t);
+  }
+
+  cudaFree(buf_h);
+  cudaFree(indices_h);
+  cudaFree(has_match_h);
+
+  cudaFree(buf_d);
+  cudaFree(indices_d);
+  cudaFree(pattern_d);
+  cudaFree(has_match_d);
+
+  return matches;
+}
+
+results_t score_matches(strings_t *__restrict__ matches, string_t pattern) {
   results_t res = {0};
 
   size_t buf_size = 0;
