@@ -179,16 +179,6 @@ __global__ void fused_score_kernel(char *__restrict__ buf,
   }
 }
 
-bool has_match(const char *__restrict__ source,
-               const char *__restrict__ pattern) {
-  while (*source != '\0' && *pattern != '\0') {
-    if (tolower((int)*source) == tolower((int)*pattern))
-      ++pattern;
-    ++source;
-  }
-  return *pattern == '\0';
-}
-
 strings_t match(strings_t *sources, string_t pattern) {
   // TODO: figure out a better way
   if (!init) {
