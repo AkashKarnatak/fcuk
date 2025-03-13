@@ -1,8 +1,8 @@
 # Fcuk - Fuzzy CUDA kernel
 
 fcuk (Fuzzy CUDA Kernel) is a fuzzy matching library implemented in CUDA.
-It leverages dynamic programming and parallel reduction techniques for
-efficient string matching and scoring.
+It leverages dynamic programming, wavefront parallelization and parallel
+reduction techniques for efficient string matching and scoring.
 
 # Features
 
