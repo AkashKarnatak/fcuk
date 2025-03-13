@@ -55,8 +55,9 @@ __global__ void match_kernel(char *__restrict__ buf,
 
     __syncthreads();
 
-    for (size_t s = (source.len + 1) / 2; s >= 1; s = (s + 1) / 2) {
-      if (j < s && j + s < source.len) {
+    for (size_t n = source.len, s = (n + 1) / 2; s > 0;
+         n = s, s = (s + 1) / 2) {
+      if (j < s && j + s < n) {
         pos[j] = min(pos[j], pos[j + s]);
       }
       __syncthreads();
